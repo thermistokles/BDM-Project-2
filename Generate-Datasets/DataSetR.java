@@ -24,13 +24,13 @@ public class DataSetR {
         int h = (int) (Math.random() * ((maxHeight)+1 - minHeight) + minHeight);
         int w = (int) (Math.random() * ((maxWidth)+1 - minWidth) + minWidth);
 
-        System.out.println("x1: "+ x1 +" y1: "+ y1);
-        System.out.println("h: "+ h +" w: "+ w);
+//        System.out.println("x1: "+ x1 +" y1: "+ y1);
+//        System.out.println("h: "+ h +" w: "+ w);
 
         int x2 = x1 + w;
         int y2 = y1 + h;
 
-        System.out.println("x2: "+ x2 +" y2: "+ y2);
+//        System.out.println("x2: "+ x2 +" y2: "+ y2);
 
         return String.valueOf(x1) + ',' + String.valueOf(y1) + ',' + String.valueOf(x2) + ',' + String.valueOf(y2);
 
@@ -38,7 +38,7 @@ public class DataSetR {
 
     public static void generateFile() throws Exception {
 
-        System.out.println("Rectangle: "+ generateRectangle());
+//        System.out.println("Rectangle: "+ generateRectangle());
 
         File file = new File("DataSetR.csv");
         FileWriter fw = new FileWriter(file);
