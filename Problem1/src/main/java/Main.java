@@ -14,7 +14,7 @@ public class Main {
         }
 
         // Setting the output file path
-        input[2] = "hdfs://localhost:9000/proj2/output.csv";
+        input[2] = "hdfs://localhost:9000/proj2/output.csv";SpatialJoin
 
 
         // Run 1st MR job

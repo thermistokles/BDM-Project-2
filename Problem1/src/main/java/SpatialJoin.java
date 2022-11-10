@@ -1,59 +1,62 @@
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.FloatWritable;
 import org.apache.hadoop.io.IntWritable;
-import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.Text;
-import org.apache.hadoop.mapred.*;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.MultipleInputs;
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 
 import java.io.IOException;
-import java.util.*;
+import java.util.ArrayList;
 
 public class SpatialJoin {
-    public static class Map
-            extends MapReduceBase implements Mapper<LongWritable, Text, IntWritable, Text> {
+    // In this solution, the space will be divided into [x] regions (numbered in LR->TB order).
+    private static final int regionXY = 1000; // 5 (small) or 1000 (large)
+    private static final int numRegions = regionXY * regionXY; // MUST be square
+    private static final int spaceSize = 10000; // X and Y dimension of entire 2D space, 100 (small) or 10000 (large)
+    private static final int numPoints = spaceSize * spaceSize; // MUST be square
 
-        public void map(LongWritable key, Text value, OutputCollector<IntWritable, Text> output, Reporter reporter) throws IOException {
-            // In this solution, the space will be divided into 25 regions (numbered in LR->TB order).
-            final int numRegions = 25; // MUST be square
-            final int spaceSize = 100; // MUST be square
-
-            // Getting file name
-            FileSplit fileSplit = (FileSplit)reporter.getInputSplit();
-            String path = fileSplit.getPath().toString();
-
+    public static class PointMapper extends Mapper<Object, Text, IntWritable, Text> {
+        public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
             // Splitting input line
             String line = value.toString();
             String[] tokens = line.split(",");
 
+            // Getting numerical value from input
+            int x1 = Integer.parseInt(tokens[0]);
+            int y1 = Integer.parseInt(tokens[1]);
 
-            if(path.contains("DataSetP.csv") || path.contains("DataSetP_small.csv")){
-                // Getting numerical value from input
-                int x1 = Integer.parseInt(tokens[0]);
-                int y1 = Integer.parseInt(tokens[1]);
+            // Getting the region the point belongs to for KEY, formatting output
+            IntWritable region = getRegionNum(x1, y1, numRegions, spaceSize);
+            Text output_record = new Text("p-" + x1 + "-" + y1);
+            // Outputting KV pair <region, original record value>
+            context.write(region, output_record);
+        }
+    }
 
-                // Getting the region the point belongs to for KEY, formatting output
-                IntWritable region = getRegionNum(x1, y1, numRegions, spaceSize);
-                Text output_record = new Text("p-" + x1 + "-" + y1);
+    public static class RectMapper extends Mapper<Object, Text, IntWritable, Text> {
 
-                // Outputting KV pair <region, original record value>
-                output.collect(region, output_record);
-            }
-            else if(path.contains("DataSetR.csv") || path.contains("DataSetR_small.csv")){
-                // Getting numerical value from input
-                int x1 = Integer.parseInt(tokens[0]);
-                int y1 = Integer.parseInt(tokens[1]);
-                int x2 = Integer.parseInt(tokens[2]);
-                int y2 = Integer.parseInt(tokens[3]);
+        public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
+            // Splitting input line
+            String line = value.toString();
+            String[] tokens = line.split(",");
 
-                // Getting the regions the point belongs to generate 1-M KEYS, formatting output
-                IntWritable[] regions = getRegions(x1, y1, x2, y2, numRegions, spaceSize);
-                Text output_record = new Text("r-" + x1 + "-" + y1 + "-" + x2 + "-" + y2);
+            // Getting numerical value from input
+            int x1 = Integer.parseInt(tokens[0]);
+            int y1 = Integer.parseInt(tokens[1]);
+            int x2 = Integer.parseInt(tokens[2]);
+            int y2 = Integer.parseInt(tokens[3]);
 
-                // Outputting KV pair <region, original record value> for each KEY
-                for (int i = 0; i < regions.length; i++) {
-                    output.collect(regions[i], output_record);
-                }
+            // Getting the regions the point belongs to generate 1-M KEYS, formatting output
+            IntWritable[] regions = getRegions(x1, y1, x2, y2, numRegions, spaceSize);
+            Text output_record = new Text("r-" + x1 + "-" + y1 + "-" + x2 + "-" + y2);
 
+            // Outputting KV pair <region, original record value> for each KEY
+            for (int i = 0; i < regions.length; i++) {
+                context.write(regions[i], output_record);
             }
         }
     }
@@ -71,7 +74,6 @@ public class SpatialJoin {
 
         // Use those to get the region number
         int region_int = regionX + 5 * (regionY-1);
-        System.out.println(region_int);
         IntWritable region = new IntWritable(region_int);
 
         return region;
@@ -86,11 +88,8 @@ public class SpatialJoin {
     public static int[] getRegionCoords(int x1, int y1, int numRegions, int spaceSize){
         // Getting "coordinate pair" of region in an imaginary grid space
         int[] coords = new int[2];
-        System.out.println("Points: " + x1 + ", " + y1);
         coords[0] = (int) Math.ceil((double) x1 / (spaceSize / Math.sqrt(numRegions)));
-        System.out.println("X of this point: " + coords[0]);
         coords[1] = (int) Math.ceil((double) y1 / (spaceSize / Math.sqrt(numRegions)));
-        System.out.println("Y of this point: " + coords[1]);
 
         return coords;
     }
@@ -124,10 +123,8 @@ public class SpatialJoin {
         return regions;
     }
 
-    public static class Reduce
-            extends MapReduceBase implements Reducer<IntWritable, Text, Text, Text> {
-
-        public void reduce(IntWritable key, Iterator<Text> value, OutputCollector<Text, Text> output, Reporter reporter) throws IOException {
+    public static class MapReducer extends Reducer<IntWritable, Text, Text, Text> {
+        public void reduce(IntWritable key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
             System.out.println("For region: " + key.get());
             // Initializing ArrayLists that need to hold the info
             ArrayList<Integer> point_xs = new ArrayList<Integer>();
@@ -138,9 +135,9 @@ public class SpatialJoin {
             ArrayList<Integer> rect_y2s = new ArrayList<Integer>();
 
             // Value can contain multiple records from both R and P
-            while (value.hasNext()){
+            for (Text value: values){
                 // Processing input line
-                String line = value.next().toString();
+                String line = value.toString();
                 String[] tokens = line.split("-");
 
                 // Value is either from points or rectangles
@@ -156,38 +153,47 @@ public class SpatialJoin {
                 }
             }
 
+            System.out.println("\t" + rect_x1s.size() + " rectangles and " + point_xs.size() + " points in this region");
+
             // Need to compare every point in the region to every rectangle in the region
             // This is where we write it to output if they overlap
+            int numOverlaps = 0;
             for (int rI = 0; rI < rect_x1s.size(); rI ++){
                 for (int pI = 0; pI < point_xs.size(); pI ++){
                     // Comparing point x to rectangle x's
                     if ( (point_xs.get(pI) >= rect_x1s.get(rI)) && (point_xs.get(pI) <= rect_x2s.get(rI)) ){
                         // Comparing point y to rectangle y's
                         if ( (point_ys.get(pI) >= rect_y1s.get(rI)) && (point_ys.get(pI) <= rect_y2s.get(rI)) ){
-                            System.out.println("Match found in region " + key.get() + "for point (" + point_xs.get(pI) + ", " + point_ys.get(pI) + ") in rectangle #" + rI+1);
-                            output.collect(new Text("r-" + key.get() + "-" + (rI+1)), new Text("(" + point_xs.get(pI) + ", " + point_ys.get(pI) + ")"));
+                            // This is where the output is formatted and written
+                            context.write(
+                                    new Text("region-" + key.get() + "-rect (" + rect_x1s.get(rI) + "," + rect_y1s.get(rI) + "," + rect_x2s.get(rI) + ","+  + rect_y2s.get(rI) + ")"),
+                                    new Text("(" + point_xs.get(pI) + ", " + point_ys.get(pI) + ")"));
+                            numOverlaps++;
                         }
                     }
                 }
             }
+            System.out.println("\t" + numOverlaps + " overlaps in this region");
         }
     }
 
     public static void start(String[] args) throws Exception {
-        JobConf conf = new JobConf(SpatialJoin.class);
-        conf.setJobName("Problem 2");
-        //<k,v>
-        conf.setOutputKeyClass(Text.class);
-        conf.setOutputValueClass(Text.class);
-        conf.setMapperClass(Map.class);
-        conf.setReducerClass(Reduce.class);
-        //the attribute must be consistent to this part <IntWritable, Text, IntWritable, Text>
-        conf.setInputFormat(TextInputFormat.class);
-        conf.setOutputFormat(TextOutputFormat.class);
-        org.apache.hadoop.mapred.FileInputFormat.addInputPath(conf, new Path(args[0]));
-        org.apache.hadoop.mapred.FileInputFormat.addInputPath(conf, new Path(args[1]));
-        org.apache.hadoop.mapred.FileOutputFormat.setOutputPath(conf, new Path(args[2]));
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "SpatialJoinMapReduce");
 
-        JobClient.runJob(conf);
+        System.out.println("Configuration info: \n\tThere are " + numRegions + " regions");
+        System.out.println("\tThere are " + (numPoints/numRegions) + " points per region");
+
+        job.setMapOutputKeyClass(IntWritable.class);
+        job.setMapOutputValueClass(Text.class);
+        job.setReducerClass(MapReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(Text.class);
+
+        MultipleInputs.addInputPath(job, new Path(args[0]), TextInputFormat.class, PointMapper.class);
+        MultipleInputs.addInputPath(job, new Path(args[1]), TextInputFormat.class, RectMapper.class);
+
+        FileOutputFormat.setOutputPath(job, new Path(args[2]));
+//        System.exit(job.waitForCompletion(true) ? 0 : 1);
     }
 }
