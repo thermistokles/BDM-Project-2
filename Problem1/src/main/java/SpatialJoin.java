@@ -21,6 +21,21 @@ public class SpatialJoin {
 
     public static class PointMapper extends Mapper<Object, Text, IntWritable, Text> {
         public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
+            int w_x1 = -1;
+            int w_y1 = -1;
+            int w_x2 = -1;
+            int w_y2 = -1;
+
+            // Seeing if W was provided
+            Configuration conf = context.getConfiguration();
+            String w = conf.get("w");
+            if(w.equals("true")){
+                w_x1 = Integer.parseInt(conf.get("x1"));
+                w_y1 = Integer.parseInt(conf.get("y1"));
+                w_x2 = Integer.parseInt(conf.get("x2"));
+                w_y2 = Integer.parseInt(conf.get("y2"));
+            }
+
             // Splitting input line
             String line = value.toString();
             String[] tokens = line.split(",");
@@ -30,16 +45,40 @@ public class SpatialJoin {
             int y1 = Integer.parseInt(tokens[1]);
 
             // Getting the region the point belongs to for KEY, formatting output
-            IntWritable region = getRegionNum(x1, y1, numRegions, spaceSize);
+            IntWritable region;
             Text output_record = new Text("p-" + x1 + "-" + y1);
-            // Outputting KV pair <region, original record value>
-            context.write(region, output_record);
+
+            if (w.equals("false")){
+                // Outputting KV pair <region, original record value> ALWAYS
+                region = getRegionNum(x1, y1, numRegions, spaceSize);
+                context.write(region, output_record);
+            }
+            else if (w.equals("true") && pointInRect(x1, y1, w_x1, w_y1, w_x2, w_y2)){
+                // Outputting KV pair <region, original record value> IF p in w
+                region = getRegionNum(x1, y1, numRegions, spaceSize);
+                int coords[] = getRegionCoords(x1, y1, numRegions, spaceSize);
+                context.write(region, output_record);
+            }
         }
     }
 
     public static class RectMapper extends Mapper<Object, Text, IntWritable, Text> {
-
         public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
+            int w_x1 = -1;
+            int w_y1 = -1;
+            int w_x2 = -1;
+            int w_y2 = -1;
+
+            // Seeing if W was provided
+            Configuration conf = context.getConfiguration();
+            String w = conf.get("w");
+            if(w.equals("true")){
+                w_x1 = Integer.parseInt(conf.get("x1"));
+                w_y1 = Integer.parseInt(conf.get("y1"));
+                w_x2 = Integer.parseInt(conf.get("x2"));
+                w_y2 = Integer.parseInt(conf.get("y2"));
+            }
+
             // Splitting input line
             String line = value.toString();
             String[] tokens = line.split(",");
@@ -51,14 +90,37 @@ public class SpatialJoin {
             int y2 = Integer.parseInt(tokens[3]);
 
             // Getting the regions the point belongs to generate 1-M KEYS, formatting output
-            IntWritable[] regions = getRegions(x1, y1, x2, y2, numRegions, spaceSize);
+            IntWritable[] regions;
             Text output_record = new Text("r-" + x1 + "-" + y1 + "-" + x2 + "-" + y2);
 
             // Outputting KV pair <region, original record value> for each KEY
-            for (int i = 0; i < regions.length; i++) {
-                context.write(regions[i], output_record);
+            if (w.equals("false")){
+                regions = getRegions(x1, y1, x2, y2, numRegions, spaceSize);
+                for (int i = 0; i < regions.length; i++) {
+                    // Outputting KV pair <region, original record value> ALWAYS
+                    context.write(regions[i], output_record);
+                }
+            }
+            else if (w.equals("true") && pointInRect(x1, y1, w_x1, w_y1, w_x2, w_y2)){
+                regions = getRegions(x1, y1, x2, y2, numRegions, spaceSize);
+                for (int i = 0; i < regions.length; i++) {
+                    // Outputting KV pair <region, original record value> IF p in w
+                  context.write(regions[i], output_record);
+                }
             }
         }
+    }
+
+    /**
+     * Returns true if the given point is inside the given rectangle
+     */
+    public static boolean pointInRect(int p_x1, int p_y1, int w_x1, int w_y1, int w_x2, int w_y2){
+        if(p_x1 >= w_x1 && p_x1 <= w_x2){
+            if (p_y1 >= w_y1 && p_y1 <= w_y2){
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -73,7 +135,7 @@ public class SpatialJoin {
         int regionY = (int) Math.ceil((double) y1 / (spaceSize / Math.sqrt(numRegions)));
 
         // Use those to get the region number
-        int region_int = regionX + 5 * (regionY-1);
+        int region_int = regionX + regionXY * (regionY-1);
         IntWritable region = new IntWritable(region_int);
 
         return region;
@@ -113,7 +175,7 @@ public class SpatialJoin {
         int numProcessed = 0;
         for (int x = p1_coords[0]; x <= p2_coords[0]; x++){
             for (int y = p1_coords[1]; y <= p2_coords[1]; y++){
-                int region_int = x + 5 * (y-1);
+                int region_int = x + regionXY * (y-1);
                 regions[numProcessed] = new IntWritable(region_int);
                 numProcessed++;
             }
@@ -125,7 +187,6 @@ public class SpatialJoin {
 
     public static class MapReducer extends Reducer<IntWritable, Text, Text, Text> {
         public void reduce(IntWritable key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
-            System.out.println("For region: " + key.get());
             // Initializing ArrayLists that need to hold the info
             ArrayList<Integer> point_xs = new ArrayList<Integer>();
             ArrayList<Integer> point_ys = new ArrayList<Integer>();
@@ -153,8 +214,6 @@ public class SpatialJoin {
                 }
             }
 
-            System.out.println("\t" + rect_x1s.size() + " rectangles and " + point_xs.size() + " points in this region");
-
             // Need to compare every point in the region to every rectangle in the region
             // This is where we write it to output if they overlap
             int numOverlaps = 0;
@@ -173,17 +232,33 @@ public class SpatialJoin {
                     }
                 }
             }
-            System.out.println("\t" + numOverlaps + " overlaps in this region");
+            if (numOverlaps > 0) {
+                System.out.println("Found " + numOverlaps + " overlaps in region " + key.get());
+            }
         }
     }
 
     public static void start(String[] args) throws Exception {
         Configuration conf = new Configuration();
-        Job job = Job.getInstance(conf, "SpatialJoinMapReduce");
 
         System.out.println("Configuration info: \n\tThere are " + numRegions + " regions");
         System.out.println("\tThere are " + (numPoints/numRegions) + " points per region");
 
+        if (args.length == 7){
+            System.out.println("A rectangle W was included: " + args[3] + "," + args[4] + "," + args[5] + "," + args[6]);
+            // Adding parameters for W
+            conf.set("w", "true");
+            conf.set("x1", args[3]);
+            conf.set("y1", args[4]);
+            conf.set("x2", args[5]);
+            conf.set("y2", args[6]);
+        }
+        else {
+            System.out.println("A rectangle W was NOT included");
+            conf.set("w", "false");
+        }
+
+        Job job = Job.getInstance(conf, "SpatialJoinMapReduce");
         job.setMapOutputKeyClass(IntWritable.class);
         job.setMapOutputValueClass(Text.class);
         job.setReducerClass(MapReducer.class);
@@ -192,8 +267,8 @@ public class SpatialJoin {
 
         MultipleInputs.addInputPath(job, new Path(args[0]), TextInputFormat.class, PointMapper.class);
         MultipleInputs.addInputPath(job, new Path(args[1]), TextInputFormat.class, RectMapper.class);
-
         FileOutputFormat.setOutputPath(job, new Path(args[2]));
-//        System.exit(job.waitForCompletion(true) ? 0 : 1);
+
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
     }
 }
